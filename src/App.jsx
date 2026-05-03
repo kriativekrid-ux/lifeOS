@@ -18,6 +18,8 @@ const EMOJI_OPTIONS = [
   "✈️", "🏞️", "🧑‍🍳", "🎉", "📍", "🗒️", "💬", "📌", "🫶", "🌙",
 ];
 
+const HABIT_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
 const COLOR_OPTIONS = [
   "#f7e8d3", "#f1d8c2", "#e8d5b7", "#f5e8d8", "#d8e8d9", "#d7e8f1", "#e8daf1", "#f1d8e8",
   "#f6e6d8", "#e8f1dc", "#e8f0f7", "#f0e8f1", "#f8e8f0", "#efe8d9", "#e8efe4",
@@ -76,6 +78,24 @@ const THEMES = {
   },
 };
 
+const downscalePhoto = (base64) => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const maxWidth = 1200;
+      const scale = Math.min(1, maxWidth / img.width);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const downscaled = canvas.toDataURL('image/jpeg', 0.8);
+      resolve(downscaled);
+    };
+    img.src = base64;
+  });
+};
+
 const formatDate = (ts) => {
   const d = new Date(ts);
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
@@ -120,6 +140,22 @@ export default function LifeTracker() {
   const theme = THEMES[themeName] || THEMES.bloom;
   const [pixelFilter, setPixelFilter] = useState("year");
   const [pixelSelectedDate, setPixelSelectedDate] = useState(null);
+  const [habitsSubView, setHabitsSubView] = useState("today");
+  const [habits, setHabits] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("lt_habits")) || [];
+    } catch (err) {
+      return [];
+    }
+  });
+  const [habitCompletions, setHabitCompletions] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("lt_habit_completions")) || {};
+    } catch (err) {
+      return {};
+    }
+  });
+  const [habitForm, setHabitForm] = useState({ name: "", emoji: "⭐", goal: 3, schedule: HABIT_WEEKDAYS.slice(0, 3) });
   const [journalYearMode, setJournalYearMode] = useState(false);
   const [settingsSubView, setSettingsSubView] = useState("home");
   const [sleepSubView, setSleepSubView] = useState("dial");
@@ -144,6 +180,9 @@ export default function LifeTracker() {
     if (view === "sleep") {
       setSleepSubView("dial");
     }
+    if (view === "habits") {
+      setHabitsSubView("today");
+    }
     if (view !== "journal") {
       setJournalYearMode(false);
     }
@@ -151,9 +190,25 @@ export default function LifeTracker() {
 
   useEffect(() => {
     try {
+      localStorage.setItem("lt_habits", JSON.stringify(habits));
+    } catch (err) {
+      console.warn("Failed to save habits", err);
+    }
+  }, [habits]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("lt_habit_completions", JSON.stringify(habitCompletions));
+    } catch (err) {
+      console.warn("Failed to save habit completions", err);
+    }
+  }, [habitCompletions]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem("lt_entries", JSON.stringify(entries));
     } catch (err) {
-      console.warn("Failed to save life tracker entries", err);
+      console.error("Failed to save life tracker entries", err);
     }
   }, [entries]);
 
@@ -191,14 +246,18 @@ export default function LifeTracker() {
     reader.readAsDataURL(file);
   };
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!form.title.trim()) return;
+    let photo = form.photo;
+    if (photo) {
+      photo = await downscalePhoto(photo);
+    }
     const entry = {
       id: Date.now(),
       category: form.category,
       title: form.title,
       note: form.note,
-      photo: form.photo,
+      photo: photo,
       timestamp: Date.now(),
     };
     setEntries((prev) => [entry, ...prev]);
@@ -218,6 +277,89 @@ export default function LifeTracker() {
   const formatDateKey = (ts) => {
     const d = new Date(ts);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const todayHabitKey = formatDateKey(new Date());
+  const todayHabitCompletions = habitCompletions[todayHabitKey] || [];
+  const currentHabitDone = new Set(todayHabitCompletions);
+  const completedHabitsCount = habits.filter((habit) => currentHabitDone.has(habit.id)).length;
+  const habitGoalSchedule = (goal) => HABIT_WEEKDAYS.slice(0, goal);
+
+  const toggleHabitCompletion = (habitId) => {
+    setHabitCompletions((prev) => {
+      const current = prev[todayHabitKey] || [];
+      const alreadyDone = current.includes(habitId);
+      const next = alreadyDone ? current.filter((id) => id !== habitId) : [...current, habitId];
+      return { ...prev, [todayHabitKey]: next };
+    });
+  };
+
+  const getHabitStreak = (habit) => {
+    const scheduleSet = new Set(habit.schedule);
+    if (!habit.schedule.length) return 0;
+    const weekLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let streak = 0;
+    const day = new Date();
+    for (let i = 0; i < 366; i += 1) {
+      const key = formatDateKey(day);
+      const label = weekLabels[day.getDay()];
+      if (scheduleSet.has(label)) {
+        const completed = (habitCompletions[key] || []).includes(habit.id);
+        if (!completed) break;
+        streak += 1;
+      }
+      day.setDate(day.getDate() - 1);
+    }
+    return streak;
+  };
+
+  const formatHabitSchedule = (schedule) => {
+    if (!schedule.length) return "No schedule";
+    const count = schedule.length;
+    const indices = schedule
+      .map((day) => HABIT_WEEKDAYS.indexOf(day))
+      .filter((index) => index >= 0)
+      .sort((a, b) => a - b);
+    const isConsecutive = indices.length > 1 && indices.every((value, index) => index === 0 || value === indices[index - 1] + 1);
+    const range = isConsecutive
+      ? `${HABIT_WEEKDAYS[indices[0]]}–${HABIT_WEEKDAYS[indices[indices.length - 1]]}`
+      : schedule.join(", ");
+    return `${count}x per week • ${range}`;
+  };
+
+  const addHabit = () => {
+    const name = habitForm.name.trim();
+    if (!name) return;
+    const schedule = habitForm.schedule.length ? habitForm.schedule : habitGoalSchedule(habitForm.goal);
+    const habit = {
+      id: `${Date.now()}`,
+      name,
+      emoji: habitForm.emoji,
+      goal: habitForm.goal,
+      schedule,
+    };
+    setHabits((prev) => [habit, ...prev]);
+    setHabitForm({ name: "", emoji: "⭐", goal: 3, schedule: habitGoalSchedule(3) });
+  };
+
+  const updateHabitGoal = (goal) => {
+    setHabitForm((prev) => ({ ...prev, goal, schedule: habitGoalSchedule(goal) }));
+  };
+
+  const toggleHabitScheduleDay = (day) => {
+    setHabitForm((prev) => {
+      const hasDay = prev.schedule.includes(day);
+      const schedule = hasDay ? prev.schedule.filter((value) => value !== day) : [...prev.schedule, day];
+      return { ...prev, schedule };
+    });
+  };
+
+  const removeHabit = (habitId) => {
+    setHabits((prev) => prev.filter((habit) => habit.id !== habitId));
+    setHabitCompletions((prev) => {
+      const entries = Object.entries(prev).map(([key, list]) => [key, list.filter((id) => id !== habitId)]);
+      return Object.fromEntries(entries.filter(([, list]) => list.length > 0));
+    });
   };
 
   const buildCalendar = (baseDate) => {
@@ -519,6 +661,36 @@ export default function LifeTracker() {
         .pixel-filter-bar { display: flex; gap: 10px; margin: 16px 0 12px; flex-wrap: wrap; }
         .pixel-filter-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; padding: 10px 14px; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; transition: all 0.18s; min-height: 40px; }
         .pixel-filter-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .habits-pill-row { display: flex; gap: 10px; margin: 12px 0 18px; }
+        .habits-pill { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 10px 16px; border: 1.5px solid var(--border); border-radius: 999px; background: var(--bg-card); color: var(--text-secondary); cursor: pointer; transition: background 0.18s, color 0.18s; }
+        .habits-pill.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .habit-progress-card { background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 18px; padding: 14px 16px; margin-bottom: 16px; }
+        .habit-progress-label { font-family: 'DM Sans', sans-serif; font-size: 13px; color: var(--text-secondary); margin-bottom: 10px; }
+        .habit-progress-track { width: 100%; height: 10px; border-radius: 999px; background: rgba(255,255,255,0.6); overflow: hidden; }
+        .habit-progress-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.2s ease; }
+        .habit-list { display: grid; gap: 12px; }
+        .habit-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 18px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
+        .habit-row.done { border-color: var(--accent); background: rgba(168,111,191,0.1); }
+        .habit-row-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .habit-icon { width: 38px; height: 38px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; background: var(--header-bg); font-size: 18px; }
+        .habit-name { font-family: 'Playfair Display', serif; font-size: 16px; color: var(--text-primary); }
+        .habit-streak { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); }
+        .habit-check { width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid var(--border); display: grid; place-items: center; color: var(--text-primary); }
+        .habit-check.done { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+        .habits-manage .form-section { display: grid; gap: 12px; }
+        .input-field { width: 100%; border-radius: 16px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 14px 16px; }
+        .goal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+        .goal-pill { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 10px 0; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
+        .goal-pill.selected { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .habit-schedule-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+        .habit-day-toggle { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 12px 0; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
+        .habit-day-toggle.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .habit-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 18px; border: 1.5px solid var(--border); background: var(--bg-card); }
+        .habit-item-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .habit-summary { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); }
+        .habit-delete-btn { width: 36px; height: 36px; border: 1.5px solid var(--border); border-radius: 14px; background: transparent; color: var(--text-secondary); font-size: 18px; cursor: pointer; }
+        .habit-empty { padding: 32px 0; text-align: center; color: var(--text-secondary); font-family: 'DM Sans', sans-serif; }
+        .habit-empty-arrow { margin-top: 8px; font-size: 18px; }
         .pixels-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
         .pixels-title { font-family: 'Playfair Display', serif; font-size: 26px; color: var(--text-primary); }
         .pixels-sub { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); text-transform: uppercase; margin-top: 4px; }
@@ -592,11 +764,11 @@ export default function LifeTracker() {
         .section-header { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
         .section-title { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--text-primary); }
         .section-description { font-family: 'DM Sans', sans-serif; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
-        .sleep-screen { display: flex; flex-direction: column; min-height: calc(100vh - 160px - env(safe-area-inset-bottom)); max-height: calc(100vh - 160px - env(safe-area-inset-bottom)); gap: 14px; }
+        .sleep-screen { display: flex; flex-direction: column; min-height: calc(100dvh - 160px - env(safe-area-inset-bottom)); gap: 14px; overflow-y: auto; }
         .sleep-top-bar { display: flex; justify-content: flex-end; gap: 10px; height: 50px; align-items: center; }
         .sleep-top-pill { font-family: 'DM Sans', sans-serif; font-size: 12px; letter-spacing: 0.6px; padding: 10px 14px; height: 100%; border-radius: 999px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; transition: background 0.18s, color 0.18s, transform 0.18s; }
         .sleep-top-pill.active { background: rgba(255,255,255,0.9); color: var(--text-primary); border-color: var(--accent); }
-        .sleep-dial-main { display: grid; grid-template-rows: 70px auto 80px minmax(120px, 1fr) 56px; gap: 14px; height: 100%; min-height: 0; }
+        .sleep-dial-main { display: grid; grid-template-rows: 70px auto 80px minmax(120px, 1fr) 56px; gap: 14px; height: 100%; min-height: 0; padding-bottom: 120px; }
         .sleep-time-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: center; height: 70px; }
         .sleep-time-block { background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 18px; padding: 16px; display: grid; gap: 6px; }
         .sleep-time-block.right { text-align: right; }
@@ -1027,9 +1199,97 @@ export default function LifeTracker() {
 
         {view === "habits" && (
           <div className="content">
-            <div className="placeholder-screen">
-              <div className="placeholder-text">Coming soon</div>
+            <div className="habits-pill-row">
+              <button type="button" className={`habits-pill ${habitsSubView === "today" ? "active" : ""}`} onClick={() => setHabitsSubView("today")}>Today</button>
+              <button type="button" className={`habits-pill ${habitsSubView === "manage" ? "active" : ""}`} onClick={() => setHabitsSubView("manage")}>Manage</button>
             </div>
+
+            {habitsSubView === "today" ? (
+              <div className="habits-today">
+                <div className="habit-progress-card">
+                  <div className="habit-progress-label">{completedHabitsCount} of {habits.length} done</div>
+                  <div className="habit-progress-track">
+                    <div className="habit-progress-fill" style={{ width: habits.length ? `${Math.round((completedHabitsCount / habits.length) * 100)}%` : "0%" }} />
+                  </div>
+                </div>
+                {habits.length === 0 ? (
+                  <div className="habit-empty">
+                    <div>Add your first habit below</div>
+                    <div className="habit-empty-arrow">⬇️</div>
+                  </div>
+                ) : (
+                  <div className="habit-list">
+                    {habits.map((habit) => {
+                      const done = currentHabitDone.has(habit.id);
+                      return (
+                        <button key={habit.id} type="button" className={`habit-row ${done ? "done" : ""}`} onClick={() => toggleHabitCompletion(habit.id)}>
+                          <div className="habit-row-meta">
+                            <div className="habit-icon">{habit.emoji}</div>
+                            <div>
+                              <div className="habit-name">{habit.name}</div>
+                              <div className="habit-streak">🔥 {getHabitStreak(habit)} days</div>
+                            </div>
+                          </div>
+                          <div className={`habit-check ${done ? "done" : ""}`}>
+                            {done ? "✓" : ""}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="habits-manage">
+                <div className="form-section">
+                  <span className="form-label">Habit name</span>
+                  <input className="input-field" type="text" placeholder="What habit do you want?" value={habitForm.name} onChange={(e) => setHabitForm((prev) => ({ ...prev, name: e.target.value }))} />
+                  <span className="form-label">Emoji</span>
+                  <div className="emoji-grid">
+                    {EMOJI_OPTIONS.map((emoji) => (
+                      <button key={emoji} type="button" className={`emoji-item ${habitForm.emoji === emoji ? "selected" : ""}`} onClick={() => setHabitForm((prev) => ({ ...prev, emoji }))}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="form-label">Goal</span>
+                  <div className="goal-grid">
+                    {[1, 2, 3, 4, 5, 6, 7].map((value) => (
+                      <button key={value} type="button" className={`goal-pill ${habitForm.goal === value ? "selected" : ""}`} onClick={() => updateHabitGoal(value)}>
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="form-label">Schedule</span>
+                  <div className="habit-schedule-row">
+                    {HABIT_WEEKDAYS.map((day) => (
+                      <button key={day} type="button" className={`habit-day-toggle ${habitForm.schedule.includes(day) ? "active" : ""}`} onClick={() => toggleHabitScheduleDay(day)}>
+                        {day.slice(0, 1)}
+                      </button>
+                    ))}
+                  </div>
+                  <button type="button" className="btn-primary" onClick={addHabit}>Add Habit</button>
+                </div>
+                <div className="habit-list manage-list">
+                  {habits.length === 0 ? (
+                    <div className="habit-empty">No habits yet — add one to get started.</div>
+                  ) : (
+                    habits.map((habit) => (
+                      <div key={habit.id} className="habit-item">
+                        <div className="habit-item-meta">
+                          <span className="habit-icon">{habit.emoji}</span>
+                          <div>
+                            <div className="habit-name">{habit.name}</div>
+                            <div className="habit-summary">{formatHabitSchedule(habit.schedule)}</div>
+                          </div>
+                        </div>
+                        <button type="button" className="habit-delete-btn" onClick={() => removeHabit(habit.id)}>×</button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

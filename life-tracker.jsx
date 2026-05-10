@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { get, set } from "idb-keyval";
 
 const CATEGORIES = [
   { id: "health", label: "Health", icon: "🫀", color: "#e8d5b7" },
@@ -25,16 +26,71 @@ export default function LifeTracker() {
   const [view, setView] = useState("journal"); // journal | add | detail
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [filterCat, setFilterCat] = useState("all");
+  const [loading, setLoading] = useState(true);
 
   // Form state
   const [form, setForm] = useState({ category: "health", title: "", note: "", photo: null, photoPreview: null });
-  const fileRef = useRef();
+  const fileRef = useRef(null);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    const loadEntries = async () => {
+      try {
+        const stored = await get('life-tracker-entries');
+        if (stored) {
+          setEntries(stored);
+        }
+      } catch (error) {
+        console.error('Failed to load entries from IndexedDB:', error);
+      } finally {
+        setLoading(false);
+        loadedRef.current = true;
+      }
+    };
+    loadEntries();
+  }, []);
+
+  useEffect(() => {
+    if (loadedRef.current) {
+      const saveEntries = async () => {
+        try {
+          await set('life-tracker-entries', entries);
+        } catch (error) {
+          console.error('Failed to save entries to IndexedDB:', error);
+        }
+      };
+      saveEntries();
+    }
+  }, [entries]);
 
   const handlePhoto = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => setForm((f) => ({ ...f, photo: ev.target.result, photoPreview: ev.target.result }));
+    reader.onload = async (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        let { width, height } = img;
+        const maxSize = 1600;
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          } else {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+        const resizedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        setForm((f) => ({ ...f, photo: resizedDataUrl, photoPreview: resizedDataUrl }));
+      };
+      img.src = ev.target.result;
+    };
     reader.readAsDataURL(file);
   };
 
@@ -164,7 +220,13 @@ export default function LifeTracker() {
         {/* JOURNAL VIEW */}
         {view === "journal" && (
           <div className="content">
-            {filtered.length === 0 ? (
+            {loading ? (
+              <div className="empty">
+                <div className="empty-icon">⏳</div>
+                <div className="empty-title">Loading your journal...</div>
+                <div className="empty-sub">Please wait while we fetch your moments.</div>
+              </div>
+            ) : filtered.length === 0 ? (
               <div className="empty">
                 <div className="empty-icon">📔</div>
                 <div className="empty-title">Your story starts here</div>

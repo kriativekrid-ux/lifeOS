@@ -155,7 +155,8 @@ export default function LifeTracker() {
       return {};
     }
   });
-  const [habitForm, setHabitForm] = useState({ name: "", emoji: "⭐", goal: 3, schedule: HABIT_WEEKDAYS.slice(0, 3) });
+  const [habitForm, setHabitForm] = useState({ name: "", emoji: "⭐", schedule: HABIT_WEEKDAYS.slice() });
+  const [habitEmojiSheetOpen, setHabitEmojiSheetOpen] = useState(false);
   const [journalYearMode, setJournalYearMode] = useState(false);
   const [settingsSubView, setSettingsSubView] = useState("home");
   const [sleepSubView, setSleepSubView] = useState("dial");
@@ -279,18 +280,37 @@ export default function LifeTracker() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   };
 
+  const getCurrentWeekDays = () => {
+    const now = new Date();
+    const day = now.getDay();
+    const monday = new Date(now);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() + (day === 0 ? -6 : 1 - day));
+    return HABIT_WEEKDAYS.map((label, index) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + index);
+      const key = formatDateKey(date);
+      return {
+        key,
+        label: label.slice(0, 1),
+        isToday: key === todayHabitKey,
+        isFuture: date > now,
+      };
+    });
+  };
+
   const todayHabitKey = formatDateKey(new Date());
   const todayHabitCompletions = habitCompletions[todayHabitKey] || [];
   const currentHabitDone = new Set(todayHabitCompletions);
   const completedHabitsCount = habits.filter((habit) => currentHabitDone.has(habit.id)).length;
-  const habitGoalSchedule = (goal) => HABIT_WEEKDAYS.slice(0, goal);
+  const currentWeekDays = getCurrentWeekDays();
 
-  const toggleHabitCompletion = (habitId) => {
+  const toggleHabitCompletion = (habitId, dateKey = todayHabitKey) => {
     setHabitCompletions((prev) => {
-      const current = prev[todayHabitKey] || [];
+      const current = prev[dateKey] || [];
       const alreadyDone = current.includes(habitId);
       const next = alreadyDone ? current.filter((id) => id !== habitId) : [...current, habitId];
-      return { ...prev, [todayHabitKey]: next };
+      return { ...prev, [dateKey]: next };
     });
   };
 
@@ -330,20 +350,14 @@ export default function LifeTracker() {
   const addHabit = () => {
     const name = habitForm.name.trim();
     if (!name) return;
-    const schedule = habitForm.schedule.length ? habitForm.schedule : habitGoalSchedule(habitForm.goal);
     const habit = {
       id: `${Date.now()}`,
       name,
       emoji: habitForm.emoji,
-      goal: habitForm.goal,
-      schedule,
+      schedule: habitForm.schedule,
     };
     setHabits((prev) => [habit, ...prev]);
-    setHabitForm({ name: "", emoji: "⭐", goal: 3, schedule: habitGoalSchedule(3) });
-  };
-
-  const updateHabitGoal = (goal) => {
-    setHabitForm((prev) => ({ ...prev, goal, schedule: habitGoalSchedule(goal) }));
+    setHabitForm({ name: "", emoji: "⭐", schedule: HABIT_WEEKDAYS.slice() });
   };
 
   const toggleHabitScheduleDay = (day) => {
@@ -441,7 +455,15 @@ export default function LifeTracker() {
     return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
   };
 
-  const snapTo30 = (minutes) => Math.round(minutes / 30) * 30 % 1440;
+  const snapTo30 = (minutes) => Math.round(minutes / 30) * 30 % 720;
+
+  const resolveDialMinutes = (handle, minutes12) => {
+    const normalized = minutes12 % 720;
+    if (handle === "bedtime") {
+      return normalized >= 360 ? normalized + 720 : normalized;
+    }
+    return normalized >= 240 ? normalized : normalized + 720;
+  };
 
   const getDialMinutes = (clientX, clientY) => {
     const rect = dialRef.current?.getBoundingClientRect();
@@ -452,13 +474,14 @@ export default function LifeTracker() {
     const dy = clientY - centerY;
     let degrees = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
     if (degrees < 0) degrees += 360;
-    const minutes = (degrees / 360) * 1440;
-    return snapTo30(minutes);
+    const minutes12 = (degrees / 360) * 720;
+    return snapTo30(minutes12);
   };
 
   const setHandleTime = (handle, clientX, clientY) => {
-    const minutes = getDialMinutes(clientX, clientY);
-    if (minutes === null) return;
+    const minutes12 = getDialMinutes(clientX, clientY);
+    if (minutes12 === null) return;
+    const minutes = resolveDialMinutes(handle, minutes12);
     setSleepForm((prev) => ({ ...prev, [handle]: minutes }));
   };
 
@@ -501,7 +524,7 @@ export default function LifeTracker() {
   }, [draggingHandle]);
 
   const getHandlePosition = (minutes) => {
-    const angle = ((minutes / 1440) * 360 - 90) * (Math.PI / 180);
+    const angle = (((minutes % 720) / 720) * 360 - 90) * (Math.PI / 180);
     const radius = 42;
     return {
       left: 50 + radius * Math.cos(angle),
@@ -655,7 +678,8 @@ export default function LifeTracker() {
                 .filter-bar { display: flex; gap: 8px; padding: 14px 24px; overflow-x: auto; scrollbar-width: none; background: var(--header-bg); }
         .filter-bar::-webkit-scrollbar { display: none; }
         .chip { font-family: 'DM Sans', sans-serif; font-size: 11px; padding: 5px 12px; border-radius: 20px; border: 1.5px solid var(--border); background: transparent; cursor: pointer; color: var(--text-primary); white-space: nowrap; transition: all 0.15s; font-weight: 500; min-height: 44px; }
-        .year-toggle { min-width: 64px; }
+        .year-view-pill { font-family: 'DM Sans', sans-serif; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; padding: 10px 14px; border-radius: 999px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; transition: all 0.18s; margin-top: 12px; }
+        .year-view-pill.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
         .placeholder-screen { min-height: calc(100vh - 260px); display: flex; align-items: center; justify-content: center; }
         .placeholder-text { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--text-secondary); }
         .pixel-filter-bar { display: flex; gap: 10px; margin: 16px 0 12px; flex-wrap: wrap; }
@@ -669,19 +693,24 @@ export default function LifeTracker() {
         .habit-progress-track { width: 100%; height: 10px; border-radius: 999px; background: rgba(255,255,255,0.6); overflow: hidden; }
         .habit-progress-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.2s ease; }
         .habit-list { display: grid; gap: 12px; }
-        .habit-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 18px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
+        .habit-row { width: 100%; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 18px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); }
         .habit-row.done { border-color: var(--accent); background: rgba(168,111,191,0.1); }
-        .habit-row-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .habit-row-meta { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+        .habit-info { display: flex; flex-direction: column; gap: 10px; width: 100%; }
         .habit-icon { width: 38px; height: 38px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; background: var(--header-bg); font-size: 18px; }
         .habit-name { font-family: 'Playfair Display', serif; font-size: 16px; color: var(--text-primary); }
         .habit-streak { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); }
-        .habit-check { width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid var(--border); display: grid; place-items: center; color: var(--text-primary); }
-        .habit-check.done { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+        .habit-week-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+        .habit-day-button { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: none; background: transparent; cursor: pointer; min-width: 32px; min-height: 42px; padding: 6px 0; }
+        .habit-day-button:disabled { opacity: 0.4; cursor: default; }
+        .habit-day-label { font-family: 'DM Sans', sans-serif; font-size: 10px; color: var(--text-secondary); }
+        .habit-day-dot { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--border); background: transparent; transition: transform 0.15s, background 0.15s, border-color 0.15s; }
+        .habit-day-button.completed .habit-day-dot { background: var(--accent); border-color: transparent; }
+        .habit-day-button.today .habit-day-dot { transform: scale(1.3); border-color: var(--accent); }
+        .habit-day-button.today.completed .habit-day-dot { box-shadow: 0 0 0 4px rgba(168,111,191,0.15); }
+        .habit-check { display: none; }
         .habits-manage .form-section { display: grid; gap: 12px; }
         .input-field { width: 100%; border-radius: 16px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 14px 16px; }
-        .goal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-        .goal-pill { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 10px 0; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
-        .goal-pill.selected { background: var(--accent); color: var(--bg); border-color: var(--accent); }
         .habit-schedule-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
         .habit-day-toggle { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 12px 0; border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
         .habit-day-toggle.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
@@ -705,6 +734,8 @@ export default function LifeTracker() {
         .pixel-day { display: flex; flex-direction: column; align-items: center; gap: 8px; }
         .pixel-day.week .pixel-meta, .pixels-grid.month .pixel-meta { font-size: 11px; }
         .pixel-dot { width: var(--dot-size, 14px); height: var(--dot-size, 14px); border-radius: 50%; border: 1.5px solid var(--border); background: var(--pixel-future); box-shadow: 0 8px 18px rgba(0,0,0,0.08); transition: transform 0.2s, background 0.2s, border-color 0.2s; cursor: pointer; }
+        .pixel-dot-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; border: none; background: transparent; cursor: pointer; }
+        .pixel-dot-button:disabled { cursor: default; }
         .pixels-grid.year .pixel-dot { --dot-size: 10px; }
         .pixels-grid.month .pixel-dot { --dot-size: 16px; }
         .pixels-grid.week .pixel-dot { --dot-size: 22px; }
@@ -775,6 +806,21 @@ export default function LifeTracker() {
         .sleep-dial-container { display: flex; justify-content: center; align-items: center; }
         .sleep-dial-wrapper { width: 100%; max-width: 420px; aspect-ratio: 1 / 1; }
         .sleep-dial { position: relative; width: 100%; height: 100%; }
+        .sleep-dial-markers { position: absolute; inset: 0; pointer-events: none; }
+        .sleep-dial-marker { position: absolute; font-family: 'DM Sans', sans-serif; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+        .sleep-dial-marker.top { top: 6%; left: 50%; transform: translateX(-50%); }
+        .sleep-dial-marker.right { right: 6%; top: 50%; transform: translateY(-50%); text-align: right; }
+        .sleep-dial-marker.bottom { bottom: 6%; left: 50%; transform: translateX(-50%); }
+        .sleep-dial-marker.left { left: 6%; top: 50%; transform: translateY(-50%); }
+        .sleep-dial-tick { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--text-secondary); }
+        .sleep-dial-tick.tick-1 { right: 16%; top: 17%; transform: translate(50%, -50%); }
+        .sleep-dial-tick.tick-2 { right: 17%; top: 32%; transform: translate(50%, -50%); }
+        .sleep-dial-tick.tick-4 { right: 17%; bottom: 32%; transform: translate(50%, 50%); }
+        .sleep-dial-tick.tick-5 { right: 16%; bottom: 17%; transform: translate(50%, 50%); }
+        .sleep-dial-tick.tick-7 { left: 16%; bottom: 17%; transform: translate(-50%, 50%); }
+        .sleep-dial-tick.tick-8 { left: 17%; bottom: 32%; transform: translate(-50%, 50%); }
+        .sleep-dial-tick.tick-10 { left: 17%; top: 32%; transform: translate(-50%, -50%); }
+        .sleep-dial-tick.tick-11 { left: 16%; top: 17%; transform: translate(-50%, -50%); }
         .sleep-arc-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
         .sleep-dial-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; pointer-events: none; text-align: center; }
         .sleep-dial-label { font-family: 'DM Sans', sans-serif; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-secondary); }
@@ -825,6 +871,10 @@ export default function LifeTracker() {
         .sleep-entry-emoji { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: 14px; background: var(--accent); color: var(--bg); font-size: 18px; }
         .sleep-entry-subtext { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); }
         .emoji-grid, .color-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+        .emoji-picker-button { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 18px 16px; border-radius: 18px; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--text-primary); cursor: pointer; transition: border-color 0.15s, background 0.15s; text-align: center; }
+        .emoji-picker-value { font-size: 36px; line-height: 1; }
+        .emoji-picker-label { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.8px; }
+        .form-help { font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--text-secondary); margin-top: 4px; margin-bottom: 10px; }
         .emoji-item, .color-swatch-item { border-radius: 12px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.15s, border-color 0.15s, background 0.15s; }
         .emoji-item { font-size: 18px; background: var(--bg-card); border: 1.5px solid var(--border); color: var(--text-primary); }
         .emoji-item.selected { border-color: var(--accent); background: var(--header-bg); }
@@ -955,6 +1005,15 @@ export default function LifeTracker() {
             <div>
               <div className="header-title">Life Tracker</div>
               <div className="header-sub">{todayLabel}</div>
+              {view === "journal" && entries.length > 0 && (
+                <button
+                  type="button"
+                  className={`year-view-pill ${journalYearMode ? "active" : ""}`}
+                  onClick={() => setJournalYearMode((prev) => !prev)}
+                >
+                  📅 Year view
+                </button>
+              )}
               {currentStreak > 1 && <div className="header-streak">🔥 {currentStreak} day streak</div>}
             </div>
           </div>
@@ -979,13 +1038,6 @@ export default function LifeTracker() {
                 {c.icon} {c.label}
               </button>
             ))}
-            <button
-              type="button"
-              className={`chip year-toggle ${journalYearMode ? "active" : ""}`}
-              onClick={() => setJournalYearMode((prev) => !prev)}
-            >
-              Year
-            </button>
           </div>
         )}
 
@@ -1092,6 +1144,20 @@ export default function LifeTracker() {
                           <circle cx="50" cy="50" r="40" fill="none" stroke="var(--border)" strokeWidth="1.5" />
                           <path d={clockArcPath()} stroke="var(--accent)" strokeWidth="8" fill="none" strokeLinecap="round" />
                         </svg>
+                        <div className="sleep-dial-markers">
+                          <span className="sleep-dial-marker top">12</span>
+                          <span className="sleep-dial-marker right">3</span>
+                          <span className="sleep-dial-marker bottom">6</span>
+                          <span className="sleep-dial-marker left">9</span>
+                          <span className="sleep-dial-tick tick-1" />
+                          <span className="sleep-dial-tick tick-2" />
+                          <span className="sleep-dial-tick tick-4" />
+                          <span className="sleep-dial-tick tick-5" />
+                          <span className="sleep-dial-tick tick-7" />
+                          <span className="sleep-dial-tick tick-8" />
+                          <span className="sleep-dial-tick tick-10" />
+                          <span className="sleep-dial-tick tick-11" />
+                        </div>
                         <div className="sleep-dial-center">
                           <div className="sleep-dial-label">SLEEP</div>
                           <div className="sleep-dial-duration">{formatSleepDuration()}</div>
@@ -1222,18 +1288,32 @@ export default function LifeTracker() {
                     {habits.map((habit) => {
                       const done = currentHabitDone.has(habit.id);
                       return (
-                        <button key={habit.id} type="button" className={`habit-row ${done ? "done" : ""}`} onClick={() => toggleHabitCompletion(habit.id)}>
+                        <div key={habit.id} className={`habit-row ${done ? "done" : ""}`}>
                           <div className="habit-row-meta">
                             <div className="habit-icon">{habit.emoji}</div>
-                            <div>
+                            <div className="habit-info">
                               <div className="habit-name">{habit.name}</div>
+                              <div className="habit-week-strip">
+                                {currentWeekDays.map((day) => {
+                                  const completed = (habitCompletions[day.key] || []).includes(habit.id);
+                                  return (
+                                    <button
+                                      key={day.key}
+                                      type="button"
+                                      className={`habit-day-button ${completed ? "completed" : ""} ${day.isToday ? "today" : ""}`}
+                                      onClick={() => !day.isFuture && toggleHabitCompletion(habit.id, day.key)}
+                                      disabled={day.isFuture}
+                                    >
+                                      <span className="habit-day-label">{day.label}</span>
+                                      <span className="habit-day-dot" />
+                                    </button>
+                                  );
+                                })}
+                              </div>
                               <div className="habit-streak">🔥 {getHabitStreak(habit)} days</div>
                             </div>
                           </div>
-                          <div className={`habit-check ${done ? "done" : ""}`}>
-                            {done ? "✓" : ""}
-                          </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -1245,22 +1325,12 @@ export default function LifeTracker() {
                   <span className="form-label">Habit name</span>
                   <input className="input-field" type="text" placeholder="What habit do you want?" value={habitForm.name} onChange={(e) => setHabitForm((prev) => ({ ...prev, name: e.target.value }))} />
                   <span className="form-label">Emoji</span>
-                  <div className="emoji-grid">
-                    {EMOJI_OPTIONS.map((emoji) => (
-                      <button key={emoji} type="button" className={`emoji-item ${habitForm.emoji === emoji ? "selected" : ""}`} onClick={() => setHabitForm((prev) => ({ ...prev, emoji }))}>
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="form-label">Goal</span>
-                  <div className="goal-grid">
-                    {[1, 2, 3, 4, 5, 6, 7].map((value) => (
-                      <button key={value} type="button" className={`goal-pill ${habitForm.goal === value ? "selected" : ""}`} onClick={() => updateHabitGoal(value)}>
-                        {value}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="form-label">Schedule</span>
+                  <button type="button" className="emoji-picker-button" onClick={() => setHabitEmojiSheetOpen(true)}>
+                    <span className="emoji-picker-value">{habitForm.emoji}</span>
+                    <span className="emoji-picker-label">Tap to change icon</span>
+                  </button>
+                  <span className="form-label">Days</span>
+                  <div className="form-help">Tap days you want to track this habit.</div>
                   <div className="habit-schedule-row">
                     {HABIT_WEEKDAYS.map((day) => (
                       <button key={day} type="button" className={`habit-day-toggle ${habitForm.schedule.includes(day) ? "active" : ""}`} onClick={() => toggleHabitScheduleDay(day)}>
@@ -1288,6 +1358,32 @@ export default function LifeTracker() {
                     ))
                   )}
                 </div>
+                {habitEmojiSheetOpen && (
+                  <div className="pixel-sheet-overlay" onClick={() => setHabitEmojiSheetOpen(false)}>
+                    <div className="pixel-sheet" onClick={(e) => e.stopPropagation()}>
+                      <div className="pixel-sheet-handle" />
+                      <div className="pixel-sheet-header">
+                        <div className="pixel-sheet-title">Choose an icon</div>
+                        <button type="button" className="pixel-sheet-close" onClick={() => setHabitEmojiSheetOpen(false)}>Close</button>
+                      </div>
+                      <div className="emoji-grid">
+                        {EMOJI_OPTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className={`emoji-item ${habitForm.emoji === emoji ? "selected" : ""}`}
+                            onClick={() => {
+                              setHabitForm((prev) => ({ ...prev, emoji }));
+                              setHabitEmojiSheetOpen(false);
+                            }}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1434,11 +1530,15 @@ export default function LifeTracker() {
                           {valid ? (
                             <button
                               type="button"
-                              className={`pixel-dot ${isPastOrToday ? "filled" : ""} ${isToday ? "today" : ""}`}
+                              className="pixel-dot-button"
                               onClick={() => isPastOrToday && setPixelSelectedDate(dateKey)}
                               disabled={!isPastOrToday}
                               aria-label={dateKey}
-                            />
+                            >
+                              <span
+                                className={`pixel-dot ${isPastOrToday ? "filled" : ""} ${isToday ? "today" : ""}`}
+                              />
+                            </button>
                           ) : null}
                         </div>
                       );
@@ -1457,11 +1557,13 @@ export default function LifeTracker() {
                     <div key={dateKey} className={`pixel-day ${isToday ? "today" : ""} ${pixelFilter}`}>
                       <button
                         type="button"
-                        className={`pixel-dot ${isPastOrToday ? "filled" : ""}`}
+                        className="pixel-dot-button"
                         onClick={() => isPastOrToday && setPixelSelectedDate(dateKey)}
                         disabled={!isPastOrToday}
                         aria-label={dateKey}
-                      />
+                      >
+                        <span className={`pixel-dot ${isPastOrToday ? "filled" : ""} ${isToday ? "today" : ""}`} />
+                      </button>
                       <span className="pixel-meta">{dayLabel}</span>
                     </div>
                   );
